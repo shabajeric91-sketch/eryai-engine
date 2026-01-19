@@ -528,6 +528,56 @@ async function updateSessionWithGuestInfo(sessionId, analysis) {
 }
 
 // ============================================
+// SEND PUSH NOTIFICATION
+// ============================================
+async function sendPushNotification(action, context) {
+  const { sessionId, customer, analysis, isTestMode } = context;
+  const config = action.action_config || {};
+  
+  // Build notification content based on trigger type
+  let title = '🔔 EryAI';
+  let body = 'Du har ett nytt meddelande';
+  
+  if (action.trigger_value === 'reservation_complete') {
+    title = '📅 Ny bokning!';
+    body = `${analysis.guest_name || 'Gäst'} vill boka ${analysis.reservation_date || ''} kl ${analysis.reservation_time || ''} för ${analysis.party_size || '?'} pers`;
+  } else if (action.trigger_value === 'is_complaint') {
+    title = '⚠️ Klagomål';
+    body = `${analysis.guest_name || 'En gäst'} har uttryckt missnöje`;
+  } else if (action.trigger_value === 'needs_human_response') {
+    title = '💬 Behöver svar';
+    body = `${analysis.guest_name || 'En gäst'} har en fråga som behöver ditt svar`;
+  }
+  
+  try {
+    const pushResponse = await fetch('https://dashboard.eryai.tech/api/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customerId: customer.id,
+        title,
+        body,
+        data: {
+          sessionId,
+          type: config.type || action.trigger_value,
+          guestName: analysis.guest_name
+        }
+      })
+    });
+    
+    const result = await pushResponse.json();
+    
+    if (pushResponse.ok) {
+      console.log(`✅ Push notification sent: ${result.sent}/${result.total} devices`);
+    } else {
+      console.error('Push API error:', result);
+    }
+  } catch (err) {
+    console.error('Failed to send push notification:', err);
+  }
+}
+
+// ============================================
 // EXECUTE ACTION
 // ============================================
 async function executeAction(action, context) {
@@ -539,6 +589,8 @@ async function executeAction(action, context) {
     switch (action.action_type) {
       case 'create_notification':
         await createNotification(action, context);
+        // Send push notification after creating notification
+        await sendPushNotification(action, context);
         break;
         
       case 'email_staff':
@@ -555,6 +607,8 @@ async function executeAction(action, context) {
           .update({ needs_human: true })
           .eq('id', sessionId);
         console.log('✅ Session marked for handoff');
+        // Also send push for handoff
+        await sendPushNotification(action, context);
         break;
         
       default:
