@@ -1,4 +1,4 @@
-import { handleChat } from '../../lib/engine/chatEngine.js';
+import { handleChat } from '@/lib/engine/chatEngine.js';
 
 export default async function handler(req, res) {
   // CORS headers
