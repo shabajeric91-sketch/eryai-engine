@@ -1,5 +1,5 @@
 import { handleChat } from './_lib/engine/chatEngine.js';
-import { rateLimit, getClientIP } from '../lib/rateLimit.js';
+import { rateLimit, getClientIP } from './_lib/rateLimit.js';
 
 // Suspicious keywords that should flag a session
 const SUSPICIOUS_KEYWORDS = [
