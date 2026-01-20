@@ -7,7 +7,10 @@ export async function sendPush(customerId, { title, body, data = {} }) {
   try {
     const response = await fetch(PUSH_API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Internal-API-Key': process.env.INTERNAL_API_KEY || ''
+      },
       body: JSON.stringify({
         customerId,
         title,
