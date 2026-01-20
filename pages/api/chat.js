@@ -1,17 +1,63 @@
 import { handleChat } from './_lib/engine/chatEngine.js';
-// Force redeploy v3
+import { rateLimit, getClientIP } from '../lib/rateLimit.js';
+
+// Suspicious keywords that should flag a session
+const SUSPICIOUS_KEYWORDS = [
+  'api key', 'api-nyckel', 'apikey',
+  'database', 'databas', 'sql', 'query',
+  'injection', 'hack', 'penetration', 'exploit',
+  'vulnerability', 'sårbarhet', 'security test',
+  'system prompt', 'systemprompt',
+  'ignore previous', 'ignorera tidigare', 'ignore instructions',
+  'token', 'secret', 'hemlighet',
+  'password', 'lösenord', 'passwd',
+  'admin', 'root', 'sudo',
+  'env', 'environment', '.env',
+  'config', 'configuration',
+  'supabase', 'vercel', 'gemini', 'openai',
+  'internal', 'backend', 'server'
+];
+
+// Check if message contains suspicious keywords
+function checkSuspicious(message) {
+  const lower = message.toLowerCase();
+  for (const keyword of SUSPICIOUS_KEYWORDS) {
+    if (lower.includes(keyword)) {
+      return { suspicious: true, reason: `Keyword: ${keyword}` };
+    }
+  }
+  return { suspicious: false, reason: null };
+}
+
 export default async function handler(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Test-Mode');
-
+  
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
-
+  
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // ===== RATE LIMITING =====
+  const clientIP = getClientIP(req);
+  const rateLimitResult = rateLimit(clientIP);
+  
+  // Set rate limit headers
+  res.setHeader('X-RateLimit-Limit', '5');
+  res.setHeader('X-RateLimit-Remaining', String(rateLimitResult.remaining));
+  
+  if (!rateLimitResult.success) {
+    res.setHeader('Retry-After', String(rateLimitResult.retryAfter));
+    return res.status(429).json({ 
+      error: 'Too many requests',
+      message: 'Du skickar för många meddelanden. Vänta några sekunder.',
+      retryAfter: rateLimitResult.retryAfter
+    });
   }
 
   // Check if test mode
@@ -27,14 +73,22 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Invalid prompt' });
   }
 
-  // Handle chat
+  // ===== SUSPICIOUS CHECK =====
+  const suspiciousCheck = checkSuspicious(prompt);
+  if (suspiciousCheck.suspicious) {
+    console.warn(`⚠️ [SUSPICIOUS] IP: ${clientIP}, Reason: ${suspiciousCheck.reason}, Prompt: "${prompt.substring(0, 100)}..."`);
+  }
+
+  // Handle chat (pass suspicious info to engine)
   const result = await handleChat({
     prompt,
     history,
     sessionId,
     customerId,
     slug,
-    isTestMode
+    isTestMode,
+    suspicious: suspiciousCheck.suspicious,
+    suspiciousReason: suspiciousCheck.reason
   });
 
   // Check for errors
