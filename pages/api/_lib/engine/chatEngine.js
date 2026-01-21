@@ -20,282 +20,190 @@ import { sendSuperadminAlert } from '../notifications/email.js';
 const SUPERADMIN_EMAIL = 'eric@eryai.tech';
 
 // ============================================
-// MAIN CHAT ENGINE
+// MAIN CHAT HANDLER
 // ============================================
 export async function handleChat({ prompt, history, sessionId, customerId, slug, isTestMode, suspicious, suspiciousReason }) {
-  
-  // ============================================
-  // STEP 1: Identify customer
-  // ============================================
-  let customer = null;
-  
-  if (customerId) {
-    customer = await getCustomerById(customerId);
-  } else if (slug) {
-    customer = await getCustomerBySlug(slug);
-  }
+  try {
+    // STEP 1: Identify customer
+    let customer = null;
+    
+    if (slug) {
+      customer = await getCustomerBySlug(slug);
+    } else if (customerId) {
+      customer = await getCustomerById(customerId);
+    }
 
-  if (!customer) {
-    return { error: 'Customer not found', status: 404 };
-  }
+    if (!customer) {
+      return { error: 'Customer not found', status: 404 };
+    }
 
-  console.log(`🏢 Customer identified: ${customer.name} (${customer.id})`);
+    console.log(`🏢 Customer identified: ${customer.name} (${customer.id})`);
 
-  // ============================================
-  // STEP 2: Load all configs in parallel
-  // ============================================
-  const [aiConfig, analysisConfig, actions] = await Promise.all([
-    getAiConfig(customer.id),
-    getAnalysisConfig(customer.id),
-    getActiveActions(customer.id)
-  ]);
+    // STEP 2: Load AI config and actions
+    const aiConfig = await getAiConfig(customer.id);
+    const analysisConfig = await getAnalysisConfig(customer.id);
+    const actions = await getActiveActions(customer.id);
 
-  if (!aiConfig) {
-    console.error('No AI config found for customer:', customer.id);
-    return { error: 'AI configuration not found', status: 500 };
-  }
+    if (!aiConfig) {
+      return { error: 'AI config not found', status: 404 };
+    }
 
-  console.log(`🤖 AI loaded: ${aiConfig.ai_name} (${aiConfig.ai_role})`);
-  console.log(`📋 Loaded ${actions.length} actions`);
+    console.log(`🤖 AI loaded: ${aiConfig.ai_name} (${aiConfig.ai_role || 'assistant'})`);
+    console.log(`📋 Loaded ${actions?.length || 0} actions`);
 
-  // ============================================
-  // STEP 3: Get or create session
-  // ============================================
-  let currentSessionId = sessionId;
-  let existingSession = null;
+    // STEP 3: Handle session
+    let currentSessionId = sessionId;
+    let session = null;
 
-  if (currentSessionId) {
-    existingSession = await getSession(currentSessionId);
-  }
+    if (sessionId) {
+      session = await getSession(sessionId);
+    }
 
-  if (!currentSessionId) {
-    const newSession = await createSession(customer.id, {
-      source: 'eryai-engine',
-      is_test: isTestMode
-    });
-
-    if (newSession) {
-      currentSessionId = newSession.id;
-      existingSession = newSession;
+    if (!session) {
+      session = await createSession(customer.id, {});
+      currentSessionId = session.id;
       console.log(`📝 New session created: ${currentSessionId}`);
     }
-  }
 
-  // ============================================
-  // STEP 3.5: Handle suspicious sessions
-  // ============================================
-  if (suspicious && currentSessionId) {
-    console.warn(`🚨 [SECURITY] Suspicious activity detected!`);
-    console.warn(`   Session: ${currentSessionId}`);
-    console.warn(`   Reason: ${suspiciousReason}`);
-    console.warn(`   Prompt: "${prompt.substring(0, 100)}..."`);
-    
-    // Flag session as suspicious and route to superadmin
-    await updateSession(currentSessionId, {
-      suspicious: true,
-      suspicious_reason: suspiciousReason,
-      routed_to_superadmin: true
-    });
+    // STEP 3.5: Handle suspicious activity
+    if (suspicious && currentSessionId) {
+      console.warn(`🚨 [SECURITY] Suspicious activity detected!`);
+      console.warn(`Session: ${currentSessionId}`);
+      console.warn(`Reason: ${suspiciousReason}`);
+      console.warn(`Prompt: "${prompt.substring(0, 50)}..."`);
 
-    // Send email alert to superadmin
-    try {
-      await sendSuperadminAlert({
-        to: SUPERADMIN_EMAIL,
-        subject: `🚨 [SECURITY] Suspicious Activity - ${customer.name}`,
-        customerName: customer.name,
-        sessionId: currentSessionId,
-        reason: suspiciousReason,
-        prompt: prompt,
-        isTestMode
+      // Flag session as suspicious and route to superadmin
+      await updateSession(currentSessionId, {
+        suspicious: true,
+        suspicious_reason: suspiciousReason,
+        routed_to_superadmin: true
       });
-      console.log('✅ Security alert email sent to superadmin');
-    } catch (err) {
-      console.error('❌ Failed to send security alert email:', err.message);
+
+      // Send security alert email to superadmin
+      try {
+        await sendSuperadminAlert({
+          to: SUPERADMIN_EMAIL,
+          subject: `🚨 [SECURITY] Suspicious Activity - ${customer.name}`,
+          customerName: customer.name,
+          sessionId: currentSessionId,
+          reason: suspiciousReason,
+          prompt: prompt,
+          isTestMode
+        });
+        console.log('✅ Security alert email sent to superadmin');
+      } catch (emailError) {
+        console.error('❌ Failed to send security alert:', emailError.message);
+      }
     }
-  }
 
-  // ============================================
-  // STEP 4: Check if human took over
-  // ============================================
-  let humanTookOver = false;
+    // STEP 4: Build system prompt and chat contents
+    const systemPrompt = buildSystemPrompt(aiConfig, session?.metadata);
+    const chatContents = buildChatContents(history || [], prompt);
 
-  // Check from history
-  if (history && Array.isArray(history)) {
-    const recentHistory = history.slice(-3);
-    humanTookOver = recentHistory.some(msg => msg.sender_type === 'human');
-  }
+    // STEP 5: Check keyword triggers BEFORE AI response
+    const keywordResults = checkKeywordTriggers(prompt, actions);
 
-  // Check session flag
-  if (existingSession?.needs_human) {
-    humanTookOver = true;
-  }
+    // STEP 6: Call Gemini
+    const aiResponse = await callGemini(systemPrompt, chatContents);
 
-  if (humanTookOver) {
-    console.log('👤 Human took over - AI will not respond');
-  }
+    if (!aiResponse) {
+      return { error: 'AI failed to respond', status: 500 };
+    }
 
-  // ============================================
-  // STEP 5: Save user message
-  // ============================================
-  if (currentSessionId) {
-    await saveMessage(currentSessionId, 'user', prompt, 'user');
-    await updateSession(currentSessionId, {});
-  }
+    // STEP 7: Save messages
+    await saveMessage(currentSessionId, 'user', prompt);
+    await saveMessage(currentSessionId, 'assistant', aiResponse);
 
-  // ============================================
-  // STEP 6: If human took over, send push and return
-  // ============================================
-  if (humanTookOver && currentSessionId) {
-    const guestName = existingSession?.metadata?.guest_name || 'Gäst';
-
-    // Send push notification for new guest message
-    await pushNewGuestMessage(customer.id, currentSessionId, guestName, prompt);
-
-    return {
-      response: '',
-      sessionId: currentSessionId,
-      humanTookOver: true
-    };
-  }
-
-  // ============================================
-  // STEP 7: Check keyword triggers
-  // ============================================
-  const triggeredActions = checkKeywordTriggers(prompt, actions);
-
-  // ============================================
-  // STEP 8: Build system prompt and call AI
-  // ============================================
-  const systemPrompt = buildSystemPrompt(aiConfig, triggeredActions);
-  const contents = buildChatContents(systemPrompt, aiConfig.greeting, history, prompt);
-
-  let aiResponse = '';
-
-  try {
-    aiResponse = await callGemini(contents, {
-      temperature: aiConfig.temperature || 0.7,
-      maxOutputTokens: aiConfig.max_tokens || 500
+    // Update session timestamp
+    await updateSession(currentSessionId, {
+      updated_at: new Date().toISOString()
     });
-  } catch (err) {
-    console.error('Gemini error:', err);
-    return { error: 'AI service error', status: 500 };
-  }
 
-  // ============================================
-  // STEP 9: Save AI response
-  // ============================================
-  if (currentSessionId && aiResponse) {
-    await saveMessage(currentSessionId, 'assistant', aiResponse, 'ai');
-    await updateSession(currentSessionId, {});
-  }
+    // STEP 8: Skip analysis and notifications for suspicious sessions
+    // Superadmin already notified - don't spam the customer
+    if (suspicious) {
+      console.log('⏭️ Skipping analysis for suspicious session - superadmin already notified');
+      return {
+        response: aiResponse,
+        sessionId: currentSessionId,
+        customer: customer.name,
+        suspicious: true
+      };
+    }
 
-  // ============================================
-  // STEP 10: Run analysis (AWAIT to ensure completion)
-  // ============================================
-  if (currentSessionId && analysisConfig) {
+    // STEP 9: Run conversation analysis (only for non-suspicious sessions)
     console.log('🔄 Starting analysis step...');
     
-    const fullConversation = [
-      ...(history || []),
-      { role: 'user', content: prompt },
-      { role: 'assistant', content: aiResponse }
-    ];
+    if (analysisConfig) {
+      const runAnalysis = shouldRunAnalysis(aiResponse, prompt, session?.metadata);
+      console.log(`🔄 runAnalysis called`);
+      console.log(`🔍 Analysis triggers:`, runAnalysis.triggers);
+      console.log(`🔍 Should run: ${runAnalysis.shouldRun}`);
 
-    // AWAIT the analysis so it completes before function ends
-    await runAnalysis(
-      currentSessionId,
-      customer,
-      aiConfig,
-      analysisConfig,
-      actions,
-      fullConversation,
-      aiResponse,
-      isTestMode
-    );
-  }
+      if (runAnalysis.shouldRun) {
+        console.log('🧠 Calling Gemini for analysis...');
+        
+        const fullHistory = [
+          ...(history || []),
+          { role: 'user', content: prompt },
+          { role: 'assistant', content: aiResponse }
+        ];
 
-  // ============================================
-  // STEP 11: Return response
-  // ============================================
-  return {
-    response: aiResponse,
-    sessionId: currentSessionId,
-    customerId: customer.id,
-    customerName: customer.name,
-    aiName: aiConfig.ai_name,
-    triggeredActions: triggeredActions.map(a => a.action_type),
-    needsHandoff: false,
-    suspicious: suspicious || false
-  };
-}
+        const analysisResult = await analyzeConversation(fullHistory, analysisConfig);
+        console.log('📊 Conversation analysis:', analysisResult);
 
-// ============================================
-// ANALYSIS (runs after AI response)
-// ============================================
-async function runAnalysis(sessionId, customer, aiConfig, analysisConfig, actions, conversation, aiResponse, isTestMode) {
-  console.log('🔄 runAnalysis called');
-  
-  try {
-    // Check if we should run analysis
-    const { shouldRun, triggers } = shouldRunAnalysis(conversation, aiResponse, analysisConfig);
+        // Update session metadata with analysis results
+        if (analysisResult) {
+          const metadataUpdate = {};
+          
+          if (analysisResult.guest_name) metadataUpdate.guest_name = analysisResult.guest_name;
+          if (analysisResult.guest_email) metadataUpdate.guest_email = analysisResult.guest_email;
+          if (analysisResult.guest_phone) metadataUpdate.guest_phone = analysisResult.guest_phone;
+          if (analysisResult.reservation_date) metadataUpdate.reservation_date = analysisResult.reservation_date;
+          if (analysisResult.reservation_time) metadataUpdate.reservation_time = analysisResult.reservation_time;
+          if (analysisResult.party_size) metadataUpdate.party_size = analysisResult.party_size;
+          if (analysisResult.special_requests) metadataUpdate.special_requests = analysisResult.special_requests;
 
-    console.log('🔍 Analysis triggers:', triggers);
-    console.log('🔍 Should run:', shouldRun);
+          if (Object.keys(metadataUpdate).length > 0) {
+            await updateSessionMetadata(currentSessionId, metadataUpdate);
+          }
 
-    if (!shouldRun) {
-      console.log('ℹ️ No analysis triggers detected - skipping');
-      return;
+          // Get fired triggers and execute actions
+          const firedTriggers = getFiredTriggers(analysisResult);
+          console.log('🎯 Fired triggers:', firedTriggers);
+
+          for (const trigger of firedTriggers) {
+            console.log(`⚙️ Executing actions for trigger: ${trigger}`);
+            await executeActionsForTrigger(trigger, actions, {
+              customer,
+              session: { ...session, id: currentSessionId },
+              analysisResult,
+              aiConfig,
+              isTestMode
+            });
+          }
+        }
+      }
     }
 
-    // Run Gemini analysis
-    console.log('🧠 Calling Gemini for analysis...');
-    const analysis = await analyzeConversation(conversation, aiConfig.ai_name);
-
-    if (!analysis) {
-      console.log('⚠️ Analysis returned null');
-      return;
-    }
-
-    console.log('📊 Conversation analysis:', JSON.stringify(analysis));
-
-    // Update session with guest info
-    if (analysis.guest_name || analysis.guest_email || analysis.guest_phone) {
-      console.log('📝 Updating session with guest info...');
-      await updateSessionMetadata(sessionId, {
-        guest_name: analysis.guest_name,
-        guest_email: analysis.guest_email,
-        guest_phone: analysis.guest_phone
-      });
-      console.log('✅ Session updated with guest info:', analysis.guest_name);
-    }
-
-    // Get fired triggers and execute actions
-    const firedTriggers = getFiredTriggers(analysis);
-    console.log('🎯 Fired triggers:', firedTriggers);
-
-    if (firedTriggers.length === 0) {
-      console.log('ℹ️ No triggers fired - skipping actions');
-      return;
-    }
-
-    const context = {
-      sessionId,
-      customer,
-      aiConfig,
-      analysisConfig,
-      analysis,
-      isTestMode
-    };
-
-    for (const trigger of firedTriggers) {
-      console.log(`⚙️ Executing actions for trigger: ${trigger}`);
-      await executeActionsForTrigger(trigger, actions, context);
+    // STEP 10: Send push notification for new guest message (non-suspicious only)
+    try {
+      await pushNewGuestMessage(customer.id, currentSessionId, prompt);
+    } catch (pushError) {
+      console.error('❌ Push notification failed:', pushError.message);
     }
 
     console.log('✅ Analysis complete');
 
-  } catch (err) {
-    console.error('❌ Analysis error:', err.message);
-    console.error('❌ Stack:', err.stack);
+    return {
+      response: aiResponse,
+      sessionId: currentSessionId,
+      customer: customer.name,
+      suspicious: false
+    };
+
+  } catch (error) {
+    console.error('❌ Chat error:', error);
+    return { error: error.message, status: 500 };
   }
 }
