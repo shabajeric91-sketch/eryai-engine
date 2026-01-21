@@ -149,3 +149,48 @@ export async function sendGuestEmail({ customer, aiConfig, analysisConfig, analy
     html
   });
 }
+
+// ============================================
+// SEND SUPERADMIN SECURITY ALERT
+// ============================================
+export async function sendSuperadminAlert({ to, subject, customerName, sessionId, reason, prompt, isTestMode }) {
+  const DASHBOARD_URL = 'https://dashboard.eryai.tech';
+  const sessionUrl = `${DASHBOARD_URL}/dashboard/session/${sessionId}`;
+  
+  const emailSubject = isTestMode ? `[TEST] ${subject}` : subject;
+  const recipientEmail = isTestMode ? SUPERADMIN_EMAIL : to;
+  const timestamp = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Stockholm' });
+
+  return sendEmail({
+    from: 'EryAI Security <security@eryai.tech>',
+    to: recipientEmail,
+    subject: emailSubject,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #fee2e2; border: 2px solid #dc2626; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h2 style="color: #dc2626; margin: 0 0 10px 0;">🚨 Security Alert</h2>
+          <p style="color: #991b1b; margin: 0;">Suspicious activity detected on ${customerName}</p>
+        </div>
+
+        <div style="background: #f9fafb; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h3 style="margin-top: 0;">Details</h3>
+          <p><strong>Time:</strong> ${timestamp}</p>
+          <p><strong>Customer:</strong> ${customerName}</p>
+          <p><strong>Reason:</strong> <span style="background: #fef3c7; padding: 2px 8px; border-radius: 4px;">${reason}</span></p>
+          <p><strong>Session ID:</strong> <code>${sessionId}</code></p>
+        </div>
+
+        <div style="background: #fef2f2; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+          <h4 style="margin: 0 0 10px 0; color: #991b1b;">Suspicious Message:</h4>
+          <p style="margin: 0; font-style: italic;">"${prompt}"</p>
+        </div>
+
+        <div style="text-align: center;">
+          <a href="${sessionUrl}" style="background: #dc2626; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">
+            View Session
+          </a>
+        </div>
+      </div>
+    `
+  });
+}
