@@ -18,6 +18,6 @@
       "@/*": ["./*"]
     }
   },
-  "include": ["**/*.js", "**/*.jsx", "types/database.types.ts"],
-  "exclude": ["node_modules", ".next", "out"]
+  "include": ["app/**/*.js", "app/**/*.jsx", "lib/**/*.js", "types/**/*.ts"],
+  "exclude": ["node_modules", ".next", "out", "public"]
 }
