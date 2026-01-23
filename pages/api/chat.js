@@ -73,6 +73,16 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Invalid prompt' });
   }
 
+  // ===== HANDLE __greeting__ REQUEST =====
+  // This is a special request to get the greeting - redirect to /api/greeting
+  if (prompt.trim() === '__greeting__') {
+    console.log('📨 Greeting request detected - use /api/greeting instead');
+    return res.status(400).json({ 
+      error: 'Use /api/greeting endpoint for greetings',
+      hint: 'GET /api/greeting?slug=your-slug'
+    });
+  }
+
   // ===== SUSPICIOUS CHECK =====
   const suspiciousCheck = checkSuspicious(prompt);
   if (suspiciousCheck.suspicious) {
