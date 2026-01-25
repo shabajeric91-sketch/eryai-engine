@@ -89,3 +89,6 @@ const response = await fetch('https://engine.eryai.tech/api/chat', {
 2. Add row to `customer_ai_config` with personality + knowledge
 3. Add rows to `customer_actions` for behavior rules
 4. Done! No code changes needed.
+
+
+fix: trigger redeploy
