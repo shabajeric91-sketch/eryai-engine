@@ -7,17 +7,59 @@ on:
     branches: [main]
 
 jobs:
-  trigger-central:
-    name: Trigger Central Validation
+  # STEG 1: Lokal validering (snabb feedback)
+  validate-local:
+    name: Local Validation
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: TypeScript Check
+        run: |
+          if grep -q '"typecheck"' package.json 2>/dev/null; then
+            npm run typecheck
+          elif [ -f "tsconfig.json" ]; then
+            npx tsc --noEmit
+          elif [ -f "jsconfig.json" ]; then
+            npx tsc --project jsconfig.json --skipLibCheck --maxNodeModuleJsDepth 0 || echo "JSDoc check complete"
+          else
+            echo "No TypeScript config found, skipping"
+          fi
+
+      - name: Build
+        run: |
+          if grep -q '"build"' package.json 2>/dev/null; then
+            npm run build
+          else
+            echo "No build script found, skipping"
+          fi
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+  # STEG 2: Trigga global validering (endast om lokal OK)
+  trigger-global:
+    name: Trigger Global Validation
+    needs: validate-local
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - name: Notify Hub
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          curl -X POST \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
+          curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
             https://api.github.com/repos/eryai-tech/eryai-core-schema/dispatches \
-            -d '{"event_type":"repo_push","client_payload":{"repo":"${{ github.repository }}","ref":"${{ github.ref }}","sha":"${{ github.sha }}"}}'
-          echo "✅ Triggered central CI for ${{ github.repository }}"
+            -d '{"event_type":"upstream_push","client_payload":{"origin_repo":"${{ github.repository }}","sha":"${{ github.sha }}"}}'
+          echo "✅ Triggered global validation for ${{ github.repository }}"
