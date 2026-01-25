@@ -34,11 +34,11 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Test-Mode');
-  
+
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
-  
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -46,11 +46,11 @@ export default async function handler(req, res) {
   // ===== RATE LIMITING =====
   const clientIP = getClientIP(req);
   const rateLimitResult = rateLimit(clientIP);
-  
+
   // Set rate limit headers
   res.setHeader('X-RateLimit-Limit', '5');
   res.setHeader('X-RateLimit-Remaining', String(rateLimitResult.remaining));
-  
+
   if (!rateLimitResult.success) {
     res.setHeader('Retry-After', String(rateLimitResult.retryAfter));
     return res.status(429).json({ 
@@ -66,7 +66,7 @@ export default async function handler(req, res) {
     console.log('🧪 TEST MODE ENABLED');
   }
 
-  const { prompt, history, sessionId, customerId, slug } = req.body || {};
+  const { prompt, history, sessionId, customerId, slug, companion } = req.body || {};
 
   // Validate prompt
   if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
@@ -89,13 +89,14 @@ export default async function handler(req, res) {
     console.warn(`⚠️ [SUSPICIOUS] IP: ${clientIP}, Reason: ${suspiciousCheck.reason}, Prompt: "${prompt.substring(0, 100)}..."`);
   }
 
-  // Handle chat (pass suspicious info to engine)
+  // Handle chat (pass suspicious info and companion to engine)
   const result = await handleChat({
     prompt,
     history,
     sessionId,
     customerId,
     slug,
+    companion,
     isTestMode,
     suspicious: suspiciousCheck.suspicious,
     suspiciousReason: suspiciousCheck.reason
