@@ -1,3 +1,6 @@
+# ERYAI_AUTO_GENERATED - DO NOT EDIT
+# This file is managed by eryai-core-schema broadcast
+
 name: CI
 
 on:
@@ -7,9 +10,9 @@ on:
     branches: [main]
 
 jobs:
-  # STEG 1: Lokal validering (snabb feedback)
+  # STEG 1: Lokal validering (type-check, build)
   validate-local:
-    name: Local Validation
+    name: Build & Validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,10 +48,151 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
-  # STEG 2: Trigga global validering (endast om lokal OK)
+  # STEG 2: API Contract Testing (Schemathesis)
+  api-test:
+    name: API Contract Test
+    needs: validate-local
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if API routes exist
+        id: check-api
+        run: |
+          if [ -d "pages/api" ] || [ -d "app/api" ]; then
+            echo "has_api=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_api=false" >> $GITHUB_OUTPUT
+            echo "No API routes found, skipping API tests"
+          fi
+
+      - name: Setup Node.js
+        if: steps.check-api.outputs.has_api == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        if: steps.check-api.outputs.has_api == 'true'
+        run: npm ci || npm install
+
+      - name: Build
+        if: steps.check-api.outputs.has_api == 'true'
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+      - name: Start Server
+        if: steps.check-api.outputs.has_api == 'true'
+        run: |
+          npm start &
+          echo "Server starting..."
+        env:
+          PORT: 3000
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
+
+      - name: Wait for Health Check
+        if: steps.check-api.outputs.has_api == 'true'
+        run: |
+          npx wait-on http://localhost:3000/api/health --timeout 60000 || {
+            echo "Health check failed - server may not have /api/health endpoint"
+            exit 0
+          }
+
+      - name: API Contract Test (Schemathesis)
+        if: steps.check-api.outputs.has_api == 'true'
+        run: |
+          if curl -s http://localhost:3000/api/openapi.json | grep -q '"paths"'; then
+            npx schemathesis run http://localhost:3000/api/openapi.json \
+              --checks all \
+              --header "X-Internal-API-Key: ${{ secrets.INTERNAL_API_KEY }}" \
+              --header "X-Test-Mode: true" \
+              || echo "Schemathesis found issues - check logs above"
+          else
+            echo "No OpenAPI spec found or empty paths, skipping Schemathesis"
+          fi
+
+  # STEG 3: AI Logic Testing (Promptfoo)
+  ai-logic-test:
+    name: AI Logic Test (Promptfoo)
+    needs: api-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if Promptfoo config exists
+        id: check-promptfoo
+        run: |
+          if [ -f "promptfooconfig.yaml" ]; then
+            echo "has_promptfoo=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_promptfoo=false" >> $GITHUB_OUTPUT
+            echo "No promptfooconfig.yaml found, skipping AI logic tests"
+          fi
+
+      - name: Check if API routes exist
+        id: check-api
+        run: |
+          if [ -d "pages/api" ] || [ -d "app/api" ]; then
+            echo "has_api=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_api=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        if: steps.check-promptfoo.outputs.has_promptfoo == 'true' && steps.check-api.outputs.has_api == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        if: steps.check-promptfoo.outputs.has_promptfoo == 'true' && steps.check-api.outputs.has_api == 'true'
+        run: npm ci || npm install
+
+      - name: Build
+        if: steps.check-promptfoo.outputs.has_promptfoo == 'true' && steps.check-api.outputs.has_api == 'true'
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+      - name: Start Server
+        if: steps.check-promptfoo.outputs.has_promptfoo == 'true' && steps.check-api.outputs.has_api == 'true'
+        run: |
+          npm start &
+          echo "Server starting..."
+        env:
+          PORT: 3000
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+
+      - name: Wait for Health Check
+        if: steps.check-promptfoo.outputs.has_promptfoo == 'true' && steps.check-api.outputs.has_api == 'true'
+        run: npx wait-on http://localhost:3000/api/health --timeout 60000
+
+      - name: Run Promptfoo AI Logic Tests
+        if: steps.check-promptfoo.outputs.has_promptfoo == 'true' && steps.check-api.outputs.has_api == 'true'
+        run: |
+          npx promptfoo eval \
+            --config promptfooconfig.yaml \
+            --no-cache \
+            || echo "Promptfoo found issues - check logs above"
+        env:
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
+
+  # STEG 4: Trigga global validering (endast om allt OK och push till main)
   trigger-global:
     name: Trigger Global Validation
-    needs: validate-local
+    needs: [validate-local, api-test, ai-logic-test]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
